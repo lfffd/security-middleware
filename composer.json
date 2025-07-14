@@ -1,0 +1,29 @@
+{
+  "name": "lfffd/security-middleware",
+  "description": "A security middleware package for Laravel",
+  "type": "library",
+  "require": {
+    "php": ">=7.4",
+    "illuminate/http": "^8.0|^9.0|^10.0",
+    "illuminate/support": "^8.0|^9.0|^10.0",
+    "mustangostang/spyc": "^0.6"
+  },
+  "autoload": {
+    "psr-4": {
+      "Lfffd\\SecurityMiddleware\\": "src/"
+    }
+  },
+  "authors": [
+    {
+      "name": "Luis Domingues",
+      "email": "lfffd@outlook.com"
+    }
+  ],
+  "extra": {
+    "laravel": {
+      "providers": [
+        "SecurityMiddleware\\PermissionGuardServiceProvider"
+      ]
+    }
+  }
+}

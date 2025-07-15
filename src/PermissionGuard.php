@@ -193,30 +193,37 @@ class PermissionGuard
     protected static function evaluateRule(array $rule): bool
     {
         $expr = $rule['permission'] ?? $rule['permissions'] ?? null;
-        if (!$expr) return false;
+
+        if ($expr === '*') {
+            Log::info("PermissionGuard: Rule is wildcard '*', automatically passing.");
+            return true;
+        }
+
+        if (!$expr) {
+            Log::info("PermissionGuard: Rule has no permission expression, failing.");
+            return false;
+        }
 
         $parsedExpr = self::interpolateVars($expr);
 
-        // Add quotes around unquoted words (simple approach)
-        // Avoid quoting variables that start with $ or numbers, only barewords
+        // Add quotes around barewords that aren't variables/literals
         $parsedExpr = preg_replace_callback('/\b([a-zA-Z_][a-zA-Z0-9_]*)\b/', function($matches) {
             $word = $matches[1];
-            // if word is "null", "true", "false" or numeric, don't quote
             if (in_array(strtolower($word), ['null', 'true', 'false']) || is_numeric($word)) {
                 return $word;
             }
-            // if word starts with $ (variable), don't quote
             if (str_starts_with($word, '$')) {
                 return $word;
             }
-            // Otherwise quote it
             return "'$word'";
         }, $parsedExpr);
+
+        Log::info("PermissionGuard: Evaluating expression", ['expr' => $expr, 'parsed' => $parsedExpr]);
 
         try {
             return eval("return ($parsedExpr);");
         } catch (\Throwable $e) {
-            Log::error('PermissionGuard evaluation error: ' . $e->getMessage());
+            Log::error('PermissionGuard evaluation error: ' . $e->getMessage(), ['parsed' => $parsedExpr]);
             return false;
         }
     }

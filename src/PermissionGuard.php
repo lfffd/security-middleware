@@ -355,17 +355,18 @@ class PermissionGuard
 
         $parsedExpr = self::interpolateVars($expr);
 
-        // Add quotes around barewords that aren't variables/literals
-        $parsedExpr = preg_replace_callback('/\b([a-zA-Z_][a-zA-Z0-9_]*)\b/', function($matches) {
+        $parsedExpr = preg_replace_callback('/(?<!["\'])\b([a-zA-Z_][a-zA-Z0-9_]*)\b(?!["\'])/', function ($matches) {
             $word = $matches[1];
-            if (in_array(strtolower($word), ['null', 'true', 'false']) || is_numeric($word)) {
+
+            // Skip PHP literals and variables
+            if (in_array(strtolower($word), ['null', 'true', 'false']) || is_numeric($word) || str_starts_with($word, '$')) {
                 return $word;
             }
-            if (str_starts_with($word, '$')) {
-                return $word;
-            }
+
+            // Wrap in single quotes
             return "'$word'";
         }, $parsedExpr);
+
 
         Log::info("PermissionGuard: Evaluating expression", ['expr' => $expr, 'parsed' => $parsedExpr]);
 
@@ -396,7 +397,11 @@ class PermissionGuard
         return preg_replace_callback('/\\$([a-zA-Z0-9_\.]+)/', function ($matches) {
             $val = self::resolveVar($matches[1]);
             Log::info("PermissionGuard: Interpolating var", ['var' => $matches[1], 'value' => $val]);
-            return $val ?? 'null';
+            if (is_string($val) || is_numeric($val) || is_bool($val) || is_null($val)) {
+                return var_export($val, true); // returns quoted strings and raw numbers
+            }
+            return 'null'; // non-scalar values not allowed in expressions
+
         }, $text);
     }
 
@@ -419,8 +424,17 @@ class PermissionGuard
             }
         }
 
-        Log::info("PermissionGuard: resolveVar returning value", ['key' => $key, 'value' => $value]);
-        return $value;
+        if (is_scalar($value) || is_null($value)) {
+            Log::info("PermissionGuard: resolveVar returning scalar value", ['key' => $key, 'value' => $value]);
+            return $value;
+        }
+
+        Log::warning("PermissionGuard: resolveVar resolved to non-scalar (ignored in expression)", [
+            'key' => $key,
+            'resolved_type' => gettype($value)
+        ]);
+
+        return null;
     }
 
     /**

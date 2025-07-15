@@ -1,6 +1,6 @@
 <?php
 
-namespace Lfffd\SecurityMiddleware;
+namespace lfffd\SecurityMiddleware;
 
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\View;

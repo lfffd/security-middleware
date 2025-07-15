@@ -16,7 +16,7 @@
   "extra": {
     "laravel": {
       "providers": [
-        "Lfffd\\SecurityMiddleware\\PermissionGuardServiceProvider"
+        "lfffd\\SecurityMiddleware\\PermissionGuardServiceProvider"
       ]
     }
   },

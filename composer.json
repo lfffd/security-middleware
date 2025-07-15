@@ -13,13 +13,6 @@
       "Lfffd\\SecurityMiddleware\\": "src/"
     }
   },
-  "extra": {
-    "laravel": {
-      "providers": [
-        "lfffd\\SecurityMiddleware\\PermissionGuardServiceProvider"
-      ]
-    }
-  },
   "minimum-stability": "dev",
   "prefer-stable": true
 }

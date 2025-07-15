@@ -66,7 +66,12 @@ class PermissionGuard
         if (!empty($rulesConfig['parsers'])) {
             foreach ($rulesConfig['parsers'] as $var => $parser) {
                 Log::info("PermissionGuard: Executing parser", ['variable' => $var, 'parser' => $parser]);
-                self::parseVariable($var, $parser);
+                try {
+                    self::parseVariable($var, $parser);
+                } catch (\Throwable $e) {
+                    Log::warning("PermissionGuard: Denying access due to parser error", ['error' => $e->getMessage()]);
+                    return response()->view(self::$bladeError, ['message' => 'Unauthorized (model not found or invalid).'], 403);
+                }
             }
         }
 
@@ -191,7 +196,9 @@ class PermissionGuard
                     // extrair os nomes das variáveis na query, ex: ballot_id
                     preg_match_all('/\$([a-zA-Z0-9_]+)/', $configQuery, $matches);
                     foreach ($matches[1] as $varName) {
-                        $val = request()->query($varName);
+                        $queryParamName = explode('?', $url)[1]; // e.g. ballot_id=$id
+                        $queryParamName = explode('=', $queryParamName)[0];
+                        $val = request()->query($queryParamName);
                         if ($val !== null) {
                             self::$variables['input'][$varName] = $val;
                             Log::info("PermissionGuard: Captured query variable", ['var' => $varName, 'value' => $val]);
@@ -223,24 +230,109 @@ class PermissionGuard
     {
         Log::info("PermissionGuard: parseVariable called", ['key' => $key, 'parser' => $parser]);
 
-        if (is_string($parser)) {
-            if (str_starts_with($parser, 'php:')) {
-                $code = substr($parser, 4);
-                Log::info("PermissionGuard: Parsing PHP code", ['code' => $code]);
+        if (!is_string($parser)) {
+            Log::warning("PermissionGuard: Parser must be a string. Skipping.", ['parser' => $parser]);
+            return;
+        }
+
+        if (str_starts_with($parser, 'php:')) {
+            $code = substr($parser, 4);
+            Log::info("PermissionGuard: Parsing PHP code", ['code' => $code]);
+            try {
                 self::assignVariable($key, eval("return $code;"));
-            } elseif (str_starts_with($parser, 'model:')) {
-                $modelExpr = trim(substr($parser, 6));
-                Log::info("PermissionGuard: Parsing model expression", ['expression' => $modelExpr]);
-                if (!str_contains($modelExpr, '::')) {
-                    $modelClass = "App\\Models\\" . $modelExpr;
-                    $id = self::getVarFromPathOrInput('id');
-                    Log::info("PermissionGuard: Finding model by id", ['model' => $modelClass, 'id' => $id]);
-                    self::assignVariable($key, $modelClass::find($id));
-                } else {
-                    Log::info("PermissionGuard: Evaluating full model expression");
-                    self::assignVariable($key, eval("return $modelExpr;"));
-                }
+            } catch (\Throwable $e) {
+                Log::error("PermissionGuard: Error executing PHP code", ['error' => $e->getMessage()]);
+                self::assignVariable($key, null);
             }
+
+        } elseif (str_starts_with($parser, 'model:')) {
+            $modelExpr = trim(substr($parser, 6));
+            if (str_contains($modelExpr, '::')) {
+                self::handleModelEvalParser($key, $modelExpr);
+            } else {
+                self::handleModelParser($key, $modelExpr); // handles both single and chained models
+            }
+        } else {
+            Log::warning("PermissionGuard: Unsupported parser prefix", ['parser' => $parser]);
+        }
+    }
+
+    protected static function handlePhpParser($key, $parser)
+    {
+        $code = substr($parser, 4);
+        Log::info("PermissionGuard: Running PHP parser", ['code' => $code]);
+
+        try {
+            $result = eval("return $code;");
+            self::assignVariable($key, $result);
+        } catch (\Throwable $e) {
+            Log::error("PermissionGuard: Error evaluating PHP code", ['error' => $e->getMessage()]);
+            self::assignVariable($key, null);
+        }
+    }
+    protected static function handleModelParser($key, $modelPath)
+    {
+        $parts = explode(':', trim($modelPath));
+        $lastModelName = array_pop($parts);
+        $lastModelClass = "App\\Models\\$lastModelName";
+
+        $id = self::getVarFromPathOrInput('id');
+
+        Log::info("PermissionGuard: Resolving model chain (manual foreign key mode)", [
+            'modelPath' => $modelPath,
+            'id' => $id
+        ]);
+
+        try {
+            $instance = $lastModelClass::find($id);
+
+            if (!$instance) {
+                Log::warning("PermissionGuard: Instance of final model not found", ['model' => $lastModelClass, 'id' => $id]);
+                throw new \Exception("Final model instance not found, denying access.");
+            }
+
+            Log::info("PermissionGuard: Loaded final model", ['class' => $lastModelClass]);
+
+            while (!empty($parts)) {
+                $parentModelName = array_pop($parts);
+                $foreignKey = strtolower($parentModelName) . '_id';
+                $parentModelClass = "App\\Models\\$parentModelName";
+
+                $relatedId = is_array($instance)
+                    ? ($instance[$foreignKey] ?? null)
+                    : ($instance->{$foreignKey} ?? null);
+
+                if (!$relatedId) {
+                    Log::warning("PermissionGuard: Could not resolve foreign key", [
+                        'foreignKey' => $foreignKey,
+                        'fromModel' => get_class($instance)
+                    ]);
+                    throw new \Exception("Missing foreign key '$foreignKey', denying access.");
+                }
+
+                $instance = $parentModelClass::find($relatedId);
+
+                if (!$instance) {
+                    Log::warning("PermissionGuard: Could not find parent model instance", [
+                        'class' => $parentModelClass,
+                        'id' => $relatedId
+                    ]);
+                    throw new \Exception("Failed to resolve model '$parentModelName', denying access.");
+                }
+
+                Log::info("PermissionGuard: Resolved parent model", [
+                    'model' => $parentModelClass,
+                    'id' => $relatedId
+                ]);
+            }
+
+            self::assignVariable($key, $instance);
+        } catch (\Throwable $e) {
+            Log::error("PermissionGuard: Error in manual model resolution", [
+                'error' => $e->getMessage()
+            ]);
+            self::assignVariable($key, null);
+            throw $e;
         }
     }
 
@@ -357,8 +449,47 @@ class PermissionGuard
      */
     protected static function getVarFromPathOrInput($key)
     {
-        $value = request()->route($key) ?? request()->input($key);
-        Log::info("PermissionGuard: getVarFromPathOrInput", ['key' => $key, 'value' => $value]);
+        $requestPath = '/' . ltrim(request()->path(), '/');
+        $urls = self::$config['urls'] ?? [];
+
+        // 1. Check in self::$variables['input'] (set by matchUrlConfig)
+        if (isset(self::$variables['input'][$key])) {
+            Log::info("PermissionGuard: getVarFromPathOrInput matched from self::\$variables[input]", [
+                'key' => $key,
+                'value' => self::$variables['input'][$key]
+            ]);
+            return self::$variables['input'][$key];
+        }
+
+        // 2. Try to find in route path (e.g., /something/$id)
+        foreach ($urls as $urlPattern => $methods) {
+            if (!str_contains($urlPattern, '$' . $key)) {
+                continue;
+            }
+
+            $configPath = explode('?', $urlPattern)[0];
+            $configSegments = explode('/', trim($configPath, '/'));
+            $requestSegments = explode('/', trim($requestPath, '/'));
+
+            if (count($configSegments) !== count($requestSegments)) {
+                continue;
+            }
+
+            foreach ($configSegments as $i => $segment) {
+                if ($segment === '$' . $key) {
+                    $value = $requestSegments[$i];
+                    Log::info("PermissionGuard: getVarFromPathOrInput matched from path", [
+                        'key' => $key,
+                        'value' => $value
+                    ]);
+                    return $value;
+                }
+            }
+        }
+
+        // 3. Fallback to query string or request input
+        $value = request()->query($key) ?? request()->input($key);
+        Log::info("PermissionGuard: getVarFromPathOrInput fallback", ['key' => $key, 'value' => $value]);
         return $value;
     }
 }

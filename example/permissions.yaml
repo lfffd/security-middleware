@@ -101,6 +101,14 @@ urls:
             # each action should be handled in a separate method or eventually in a separate class if the code is too complex
             calculation: model:User
 
+            # more complex parsers for models can be like:
+            ballot:
+              calculation: model:Ballot:BallotQuestion
+            # this example retrieves from BallotQuestion the ballot ID and then from the Ballot the ballot record.
+            # requires that:
+            #   * Primary key is always id
+            #   * Foreign key follows the pattern <table>_id (for example, ballot_id)
+
           # the parsers can also be used to manipulate variables or input parameters
           input.id:
             # in this case, the "set" will create or replace a variable, which is defined above as "input.id"

@@ -10,7 +10,7 @@
   },
   "autoload": {
     "psr-4": {
-      "Lfffd\\SecurityMiddleware\\": "src/"
+      "lfffd\\SecurityMiddleware\\": "src/"
     }
   },
   "minimum-stability": "dev",

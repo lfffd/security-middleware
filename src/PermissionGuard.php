@@ -148,45 +148,71 @@ class PermissionGuard
     {
         $config = self::$config['urls'] ?? [];
 
-        Log::info("PermissionGuard: Starting matchUrlConfig", ['path' => $path, 'method' => $method]);
+        $requestPath = $path;
+        $requestQuery = request()->getQueryString() ?? '';
+
+        Log::info("PermissionGuard: Starting matchUrlConfig", ['path' => $requestPath, 'query' => $requestQuery, 'method' => $method]);
 
         foreach ($config as $url => $methods) {
             Log::info("PermissionGuard: Checking configured URL", ['url' => $url]);
 
-            // Step 1: Replace $variables by placeholder
+            // Separar path e query da URL configurada
+            $parts = explode('?', $url, 2);
+            $configPath = $parts[0];
+            $configQuery = $parts[1] ?? '';
+
+            // Step 1: substituir variáveis no path por placeholder
             $placeholder = '___VAR___';
-            $temp = preg_replace('/\$[a-zA-Z0-9_]+/', $placeholder, $url);
-            Log::info("PermissionGuard: After replacing variables with placeholder", ['temp' => $temp]);
+            $tempPath = preg_replace('/\$[a-zA-Z0-9_]+/', $placeholder, $configPath);
+            $escapedPath = preg_quote($tempPath, '/');
+            $patternPath = str_replace($placeholder, '[^/]+', $escapedPath);
 
-            // Step 2: Escape the rest of the URL
-            $escaped = preg_quote($temp, '/');
-            Log::info("PermissionGuard: After escaping special characters", ['escaped' => $escaped]);
+            Log::info("PermissionGuard: Path regex pattern", ['pattern' => $patternPath]);
 
-            // Step 3: Replace placeholder with regex pattern
-            $pattern = str_replace($placeholder, '[^/]+', $escaped);
-            Log::info("PermissionGuard: Final regex pattern for matching", ['pattern' => $pattern]);
+            if (preg_match("~^$patternPath$~", $requestPath)) {
+                Log::info("PermissionGuard: Path matched", ['configPath' => $configPath]);
 
-            if (preg_match("~^$pattern$~", $path)) {
-                Log::info("PermissionGuard: URL matched regex pattern", ['matched_url' => $url, 'pattern' => $pattern]);
+                // Se há query na configuração, validar também a query
+                if ($configQuery) {
+                    // Substituir variáveis na query config por padrão regex para valores
+                    $queryPattern = preg_quote($configQuery, '/');
+                    $queryPattern = preg_replace('/\\\\\$[a-zA-Z0-9_]+/', '[^&=]+', $queryPattern);
 
-                // Normalize to arrays
+                    Log::info("PermissionGuard: Query regex pattern", ['pattern' => $queryPattern]);
+
+                    if (!preg_match("~^$queryPattern$~", $requestQuery)) {
+                        Log::info("PermissionGuard: Query string did not match", ['configQuery' => $configQuery, 'requestQuery' => $requestQuery]);
+                        continue; // Query não bate, ignora esta regra
+                    }
+                }
+
+                // Se passou o match, podemos extrair valores da query para variáveis
+                if ($configQuery) {
+                    // extrair os nomes das variáveis na query, ex: ballot_id
+                    preg_match_all('/\$([a-zA-Z0-9_]+)/', $configQuery, $matches);
+                    foreach ($matches[1] as $varName) {
+                        $val = request()->query($varName);
+                        if ($val !== null) {
+                            self::$variables['input'][$varName] = $val;
+                            Log::info("PermissionGuard: Captured query variable", ['var' => $varName, 'value' => $val]);
+                        }
+                    }
+                }
+
                 $methodConfig = isset($methods[$method]) && is_array($methods[$method]) ? $methods[$method] : [];
                 $starConfig = isset($methods['*']) && is_array($methods['*']) ? $methods['*'] : [];
 
-                // Merge '*' config into method config
                 $mergedRules = array_merge_recursive($starConfig, $methodConfig);
 
-                Log::info("PermissionGuard: Found rules for method", ['method' => $method, 'rules' => $mergedRules]);
-                Log::info("PermissionGuard: Returning matched rules");
+                Log::info("PermissionGuard: Returning matched rules", ['rules' => $mergedRules]);
 
                 return $mergedRules;
             } else {
-                Log::info("PermissionGuard: URL did not match regex pattern", ['pattern' => $pattern]);
+                Log::info("PermissionGuard: Path did not match", ['pattern' => $patternPath, 'requestPath' => $requestPath]);
             }
         }
 
         Log::info("PermissionGuard: No URL matched the requested path");
-        Log::info("PermissionGuard: Returning null from matchUrlConfig");
         return null;
     }
 

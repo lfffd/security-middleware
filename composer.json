@@ -4,8 +4,8 @@
   "type": "library",
   "require": {
     "php": ">=7.4",
-    "illuminate/http": "^8.0|^9.0|^10.0",
-    "illuminate/support": "^8.0|^9.0|^10.0",
+    "illuminate/http": "^8.0|^9.0|^10.0|^12.0",
+    "illuminate/support": "^8.0|^9.0|^10.0|^12.0",
     "mustangostang/spyc": "^0.6"
   },
   "autoload": {
@@ -13,17 +13,13 @@
       "Lfffd\\SecurityMiddleware\\": "src/"
     }
   },
-  "authors": [
-    {
-      "name": "Luis Domingues",
-      "email": "lfffd@outlook.com"
-    }
-  ],
   "extra": {
     "laravel": {
       "providers": [
-        "SecurityMiddleware\\PermissionGuardServiceProvider"
+        "Lfffd\\SecurityMiddleware\\PermissionGuardServiceProvider"
       ]
     }
-  }
+  },
+  "minimum-stability": "dev",
+  "prefer-stable": true
 }

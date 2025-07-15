@@ -1,0 +1,122 @@
+# chatgpt prompt:
+# create a package to be used in Laravel, which will be used as a security middleware.
+# this package will be added to the composer.json to be used in any laravel application.
+# it will intercept all requests and grant or block access to the user.
+# the middleware will be a static class, which will be initialized, by providing the following parameters:
+#   $config -> a YAML file in the format below, which will be retrieved using SPYC class and converted to an array.
+#              the array will be cached in the laravel cache
+#   $variables -> an array containing variables, which can be an array with items, arrays or objects. The content of
+#                 the variables will be used to parse the rules in the YAML.
+#   $blade_error -> the blade file which will be triggered in case the validation fails to display the error to the user
+
+
+# YAML function section
+# this section contains the localion in the code for the functions that can be used in the permissions
+# using function:$functionName, for example:
+#    function:BallotIsOpen
+# which is definied below.
+# functions can also have parameters, and can be used like:
+#   function:ballotIsOpen($input.id)
+functions:
+  ballotIsOpen:
+    class: App\Classes\Ballots\Ballot
+    method: isOpen
+
+urls:
+  # lists all url's to be inspected
+  # if a URL is not in this list an error message is displayed and the process aborts
+
+  # this is the URL
+  /view/users/list:
+    # the method, which can be GET or POST. If we use *, it will be merged with all methods, can be useful to define
+      # rules that are used for GET and POST
+      *:
+
+      GET:
+        rules:
+          # list of rules for this URL, there can be multiple rules, if one of the rules pass, access is allowed
+          # when one of the rules fails, the message is displayed to the user and the process aborts
+          only_admin: # placeholder for rule #1
+            # the permission key contains the rules
+            # the permission can be one single line, if it's easy to parse, but if it has
+            # several chained expressions with boolean operators like OR or AND
+            # each needs to go into a different line of the array
+            # in this example $user.role == admin
+            # in the initialization of the permissions middleware, using the method
+            # addVar(name, value) like addVar('user', $user) allows passing variables to the middleware
+            # when the value is an array or an object, it can be accessed with a dot, like below $user.role
+            # when comparing $user.role == admin we will assume, for simplification that admin is 'admin',
+            # making the syntax easier
+            # this rules must be parsed first, by replacing variables with values, making sure no wrong replacements are done
+            # for example: if we have a variable $user.rol and $user.role the permission $user.role == admin cannot be replaced
+            # with the value of $user.rol
+            permission: $user.role == admin
+            # an optional message will be displayed if the error is triggered
+            # if no message is provided, the error displayed will be simply an error message, like "Rule $rule_name
+            # for $url permission $permission was not validated."
+            # in the message we can also include variables, and only variables.
+            # the message can also be a localization string:
+            # __operation_not_allowed -> this will use the localized string and replace the variables in it, like $user.role
+            message: Your role $user.role doesn't allow for this operation.
+
+  # in this URL we have also a variable being injected from the URL
+  /view/users/edit/$id:
+      *: # defining * as method, means that the configuration here will be merged with POST and GET
+    # the parsers are used to calculate dynamic variables, based on the input.
+    # parsers are executed before the rules.
+        parsers:
+          # placeholder for the parser
+          userProperties:
+            # this syntax will call the model Users and retrieve the user with the id $input.id
+            # the result will be stored in the variable $userProperties which can be used later to calculate the rules
+            # when we use only the model name, like Users, it's by default calculated that we are using the request $id
+            # to retrieve the record using the model primary key, like:
+            # calculation: model:Users
+            # if we want to search by a specific field like email we could use, which will use the $id input
+            # calculation: model:User.email
+            # if there are multiple inputs - which is not common - we must explicitly tell which input to use, like:
+            # calculation: model:User.email = $input.email
+            # when we need to do something more complex, we write the full Eloquent grammar, like
+            # model: User::where('email', $input.email)->first();
+            # the parser must automatically detect which grammar is being used
+            # each method like:
+            # model:    -> gets data from a model
+            # function: -> runs a function, defined above in the functions section
+            # $variable -> variables
+            # php:      -> runs php code
+            # each action should be handled in a separate method or eventually in a separate class if the code is too complex
+            calculation: model:User
+
+          # the parsers can also be used to manipulate variables or input parameters
+          input.id:
+            # in this case, the "set" will create or replace a variable, which is defined above as "input.id"
+            set: php:trim($input.id)
+
+          rules:
+            # the rules can also be used to sanitize the inputs
+            isInt:
+              # if we open /users/edit/50 no error will be triggered by the input rules
+              # if we open /users/edit/aaa an error will be triggered by this rule
+              calculation: is_int($id)
+              message: Id must be a numeric valid. $input.id provided.
+
+            # when there are multiple rules, one failed rule will stop the process immediately, but in order
+            # to proceed, all rules must return true.
+            roleAdmin:
+              permission: $user.role == admin
+
+            belongs_to_tenant:
+              # here we have a simple comparison
+              permission: $userProperties.tenant == $user.tenant
+              message: This record belongs to a different tenant
+
+
+        GET:
+          rules:
+            user_exists:
+              # like in the parsers, we can also use the key "model:" to call a model and apply a boolean operator
+              permissions: model:User !== null
+              message: User not found.
+
+
+        POST:

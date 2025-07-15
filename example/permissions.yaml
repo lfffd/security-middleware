@@ -22,6 +22,20 @@ functions:
     class: App\Classes\Ballots\Ballot
     method: isOpen
 
+# we can defined global rules to avoid duplication for each route, like this:
+rules:
+  only_admin:
+    permission: $user.role == admin
+
+# in the url's we can refer to the rule by using =$rule_name, for example:
+#urls:
+#  /dashboard:
+#    GET:
+#      rules:
+#        =only_admin: true  # ❌ erro, true não é um array
+#  we can also override messages or other parameters in the original rule
+#           message: custom message
+
 urls:
   # lists all url's to be inspected
   # if a URL is not in this list an error message is displayed and the process aborts

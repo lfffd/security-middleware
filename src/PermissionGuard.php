@@ -72,17 +72,48 @@ class PermissionGuard
 
         Log::info("PermissionGuard: Evaluating rules", ['rules' => $rulesConfig['rules'] ?? []]);
 
-        // Evaluate rules
         if (!empty($rulesConfig['rules'])) {
             foreach ($rulesConfig['rules'] as $ruleName => $rule) {
+                if (str_starts_with($ruleName, '=')) {
+                    $baseRuleName = substr($ruleName, 1);
+                    $globalRules = self::$config['rules'] ?? [];
+
+                    if (!isset($globalRules[$baseRuleName])) {
+                        $msg = "Referenced global rule '$baseRuleName' not found in top-level rules.";
+                        Log::error("PermissionGuard: $msg");
+                        return response()->view(self::$bladeError, ['message' => $msg], 403);
+                    }
+
+                    $baseRule = $globalRules[$baseRuleName];
+
+                    if (!is_array($rule)) {
+                        if (!empty($rule)) {
+                            Log::warning("PermissionGuard: Rule override for ={$baseRuleName} should be an array. Ignoring override.");
+                        }
+                        $rule = $baseRule;
+                    } else {
+                        $rule = array_merge($baseRule, $rule);
+                    }
+
+                    $rule['inherited_from'] = $baseRuleName;
+
+                    Log::info("PermissionGuard: Loaded inherited rule", [
+                        'inherited_from' => $baseRuleName,
+                        'final_rule' => $rule
+                    ]);
+                }
+
                 $result = self::evaluateRule($rule);
                 Log::info("PermissionGuard: Evaluating rule", ['ruleName' => $ruleName, 'result' => $result]);
+
                 if (!$result) {
                     $message = self::parseMessage($rule['message'] ?? "Rule $ruleName failed.");
-                    Log::info("PermissionGuard: Rule failed", ['ruleName' => $ruleName, 'message' => $message]);
-                    $response = response()->view(self::$bladeError, ['message' => $message], 403);
-                    Log::info("PermissionGuard: Returning unauthorized response for failed rule", ['ruleName' => $ruleName, 'response_status' => 403]);
-                    return $response;
+                    Log::info("PermissionGuard: Rule failed", [
+                        'ruleName' => $ruleName,
+                        'inherited_from' => $rule['inherited_from'] ?? null,
+                        'message' => $message
+                    ]);
+                    return response()->view(self::$bladeError, ['message' => $message], 403);
                 }
             }
         }

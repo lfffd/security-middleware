@@ -217,6 +217,23 @@ class PermissionGuard
                     // Capturar variáveis da query string
                     if ($configQuery) {
                         preg_match_all('/\$([a-zA-Z0-9_]+)/', $configQuery, $matches);
+                        // Capturar variáveis da PATH
+                        $patternPathVars = [];
+                        preg_match_all('/\$([a-zA-Z0-9_]+)/', $configPath, $patternPathVars);
+                        if (!empty($patternPathVars[1])) {
+                            $regexPath = preg_replace('/\$([a-zA-Z0-9_]+)/', '([^/]+)', preg_quote($configPath, '/'));
+                            $matchesPath = [];
+                            if (preg_match("~^$regexPath$~", $requestPath, $matchesPath)) {
+                                array_shift($matchesPath); // remove full match
+                                foreach ($patternPathVars[1] as $i => $varName) {
+                                    self::$variables['input'][$varName] = $matchesPath[$i];
+                                    Log::info("PermissionGuard: Captured path variable", ['var' => $varName, 'value' => $matchesPath[$i]]);
+                                }
+                            }
+                        }
+
+                        // Capturar variáveis da QUERY
+                        preg_match_all('/\$([a-zA-Z0-9_]+)/', $configQuery, $matches);
                         foreach ($matches[1] as $varName) {
                             $val = request()->query($varName);
                             if ($val !== null) {

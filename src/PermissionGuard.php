@@ -157,62 +157,68 @@ class PermissionGuard
 
         Log::info("PermissionGuard: Starting matchUrlConfig", ['path' => $requestPath, 'query' => $requestQuery, 'method' => $method]);
 
-        foreach ($config as $methodAndUrl => $ruleBlock) {
-            Log::info("PermissionGuard: Checking configured route key", ['route' => $methodAndUrl]);
+        // Primeiro, agrupar blocos que compartilham os mesmos valores
+        $grouped = [];
+        foreach ($config as $methodAndUrl => $block) {
+            [$m, $u] = explode(' ', $methodAndUrl, 2);
+            $m = strtoupper(trim($m));
+            $u = trim($u);
+            $key = md5(json_encode($block)); // Agrupamos por conteúdo idêntico
+            $grouped[$key]['routes'][] = ['method' => $m, 'url' => $u];
+            $grouped[$key]['block'] = $block;
+        }
 
-            // Dividir a chave em método e caminho
-            [$configMethod, $configUrl] = explode(' ', $methodAndUrl, 2);
-            $configMethod = strtoupper(trim($configMethod));
-            $configUrl = trim($configUrl);
+        foreach ($grouped as $group) {
+            foreach ($group['routes'] as $route) {
+                $configMethod = $route['method'];
+                $configUrl = $route['url'];
 
-            if ($configMethod !== $method && $configMethod !== 'ALL') {
-                continue;
-            }
-
-            $parts = explode('?', $configUrl, 2);
-            $configPath = $parts[0];
-            $configQuery = $parts[1] ?? '';
-
-            $placeholder = '___VAR___';
-            $tempPath = preg_replace('/\$[a-zA-Z0-9_]+/', $placeholder, $configPath);
-            $escapedPath = preg_quote($tempPath, '/');
-            $patternPath = str_replace($placeholder, '[^/]+', $escapedPath);
-
-            Log::info("PermissionGuard: Path regex pattern", ['pattern' => $patternPath]);
-
-            if (preg_match("~^$patternPath$~", $requestPath)) {
-                Log::info("PermissionGuard: Path matched", ['configPath' => $configPath]);
-
-                // Query matching...
-                if ($configQuery) {
-                    $queryPattern = preg_quote($configQuery, '/');
-                    $queryPattern = preg_replace('/\\\\\$[a-zA-Z0-9_]+/', '[^&=]+', $queryPattern);
-
-                    Log::info("PermissionGuard: Query regex pattern", ['pattern' => $queryPattern]);
-
-                    if (!preg_match("~^$queryPattern$~", $requestQuery)) {
-                        Log::info("PermissionGuard: Query string did not match", ['configQuery' => $configQuery, 'requestQuery' => $requestQuery]);
-                        continue;
-                    }
+                if ($configMethod !== $method && $configMethod !== 'ALL') {
+                    continue;
                 }
 
-                if ($configQuery) {
-                    preg_match_all('/\$([a-zA-Z0-9_]+)/', $configQuery, $matches);
-                    foreach ($matches[1] as $varName) {
-                        $queryParamName = explode('?', $configUrl)[1];
-                        $queryParamName = explode('=', $queryParamName)[0];
-                        $val = request()->query($queryParamName);
-                        if ($val !== null) {
-                            self::$variables['input'][$varName] = $val;
-                            Log::info("PermissionGuard: Captured query variable", ['var' => $varName, 'value' => $val]);
+                [$configPath, $configQuery] = explode('?', $configUrl, 2);
+                $placeholder = '___VAR___';
+                $tempPath = preg_replace('/\$[a-zA-Z0-9_]+/', $placeholder, $configPath);
+                $escapedPath = preg_quote($tempPath, '/');
+                $patternPath = str_replace($placeholder, '[^/]+', $escapedPath);
+
+                Log::info("PermissionGuard: Path regex pattern", ['pattern' => $patternPath]);
+
+                if (preg_match("~^$patternPath$~", $requestPath)) {
+                    Log::info("PermissionGuard: Path matched", ['configPath' => $configPath]);
+
+                    // Query matching
+                    if ($configQuery) {
+                        $queryPattern = preg_quote($configQuery, '/');
+                        $queryPattern = preg_replace('/\\\\\$[a-zA-Z0-9_]+/', '[^&=]+', $queryPattern);
+
+                        Log::info("PermissionGuard: Query regex pattern", ['pattern' => $queryPattern]);
+
+                        if (!preg_match("~^$queryPattern$~", $requestQuery)) {
+                            Log::info("PermissionGuard: Query string did not match", ['configQuery' => $configQuery, 'requestQuery' => $requestQuery]);
+                            continue;
                         }
                     }
-                }
 
-                Log::info("PermissionGuard: Returning matched rules", ['rules' => $ruleBlock]);
-                return $ruleBlock;
-            } else {
-                Log::info("PermissionGuard: Path did not match", ['pattern' => $patternPath, 'requestPath' => $requestPath]);
+                    if ($configQuery) {
+                        preg_match_all('/\$([a-zA-Z0-9_]+)/', $configQuery, $matches);
+                        foreach ($matches[1] as $varName) {
+                            $queryParamName = explode('?', $configUrl)[1];
+                            $queryParamName = explode('=', $queryParamName)[0];
+                            $val = request()->query($queryParamName);
+                            if ($val !== null) {
+                                self::$variables['input'][$varName] = $val;
+                                Log::info("PermissionGuard: Captured query variable", ['var' => $varName, 'value' => $val]);
+                            }
+                        }
+                    }
+
+                    Log::info("PermissionGuard: Returning matched rules", ['rules' => $group['block']]);
+                    return $group['block'];
+                } else {
+                    Log::info("PermissionGuard: Path did not match", ['pattern' => $patternPath, 'requestPath' => $requestPath]);
+                }
             }
         }
 

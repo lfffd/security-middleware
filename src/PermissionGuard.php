@@ -35,11 +35,41 @@ class PermissionGuard
             Log::info('PermissionGuard: Loading config from YAML file', ['file' => $yamlFilePath]);
             $yamlContent = file_get_contents($yamlFilePath);
             self::$config = Spyc::YAMLLoadString($yamlContent);
+            self::deduplicateNullRoutes(); // <--- adiciona aqui
             Cache::put('security_config', self::$config, 3600);
             Log::info('PermissionGuard: Returning from init (config loaded from YAML)');
             return;
         }
     }
+
+    protected static function deduplicateNullRoutes(): void
+    {
+        if (!isset(self::$config['urls']) || !is_array(self::$config['urls'])) {
+            Log::warning("PermissionGuard: No 'urls' section found in config.");
+            return;
+        }
+
+        $urls = &self::$config['urls'];
+        $keys = array_keys($urls);
+        $count = count($keys);
+        $lastNonNullConfig = null;
+
+        // Walk backwards to find the next non-null and assign references
+        for ($i = $count - 1; $i >= 0; $i--) {
+            $key = $keys[$i];
+            $value = &$urls[$key];
+
+            if (is_array($value) && !empty($value)) {
+                $lastNonNullConfig = &$urls[$key];
+            } elseif ($value === null && $lastNonNullConfig !== null) {
+                Log::info("PermissionGuard: Deduplicating null route", ['key' => $key]);
+                $urls[$key] = &$lastNonNullConfig;
+            }
+        }
+
+        Log::info("PermissionGuard: Finished deduplicating null routes.");
+    }
+
 
     /**
      * Handle the incoming request by checking permissions.
@@ -170,7 +200,9 @@ class PermissionGuard
             [$configMethod, $configUrl] = explode(' ', $methodAndUrl, 2);
             $configMethod = strtoupper(trim($configMethod));
             $configUrl = trim($configUrl);
+            Log::info("PermissionGuard: ", ['method' => $configMethod, 'url'=>$configUrl]);
 
+            // Armazenar rota se ainda não houver config
             if (!is_array($ruleBlock) || empty($ruleBlock)) {
                 $bufferedRoutes[] = [$configMethod, $configUrl];
                 continue;
@@ -180,6 +212,8 @@ class PermissionGuard
             $bufferedRoutes = [];
 
             foreach ($routesToCheck as [$methodToCheck, $urlToCheck]) {
+
+                // validates that the method in the YAML matches the requested method
                 if ($methodToCheck !== $method && $methodToCheck !== 'ALL') {
                     continue;
                 }
@@ -187,39 +221,88 @@ class PermissionGuard
                 $parts = explode('?', $urlToCheck, 2);
                 $configPath = $parts[0];
                 $configQuery = $parts[1] ?? '';
+                Log::info("PermissionGuard: ", ['path' => $configPath, 'query'=>$configQuery]);
 
-                // Match path and extract vars
-                $patternPathVars = [];
-                preg_match_all('/\$([a-zA-Z0-9_]+)/', $configPath, $patternPathVars);
-                $regexPath = preg_replace('/\$([a-zA-Z0-9_]+)/', '([^/]+)', preg_quote($configPath, '/'));
-                $matchesPath = [];
-                if (!preg_match("~^$regexPath$~", $requestPath, $matchesPath)) {
-                    Log::info("PermissionGuard: Path did not match", ['pattern' => $regexPath, 'requestPath' => $requestPath]);
+
+                // ------ Match do PATH ------
+                $configSegments = explode('/', trim($configPath, '/'));
+                $requestSegments = explode('/', trim($requestPath, '/'));
+                Log::info("PermissionGuard: ", ['configSegments' => $configSegments, 'requestSegments'=>$requestSegments]);
+
+                if (count($configSegments) !== count($requestSegments)) {
+                    Log::info("PermissionGuard: Segment count mismatch", [
+                        'expected' => $configSegments,
+                        'actual' => $requestSegments
+                    ]);
                     continue;
                 }
 
-                array_shift($matchesPath);
-                foreach ($patternPathVars[1] as $i => $varName) {
-                    self::$variables['input'][$varName] = $matchesPath[$i];
-                    Log::info("PermissionGuard: Captured path variable", ['var' => $varName, 'value' => $matchesPath[$i]]);
-                }
+                $matched = true;
+                Log::info("PermissionGuard: ", ['segments' => $configSegments]);
 
-                // Match query vars
-                preg_match_all('/\$([a-zA-Z0-9_]+)/', $configQuery, $queryVars);
-                foreach ($queryVars[1] as $varName) {
-                    $val = request()->query($varName);
-                    if ($val !== null) {
-                        self::$variables['input'][$varName] = $val;
-                        Log::info("PermissionGuard: Captured query variable", ['var' => $varName, 'value' => $val]);
+                foreach ($configSegments as $i => $segment) {
+                    if (str_starts_with($segment, '$')) {
+                        $varName = substr($segment, 1);
+                        $value = $requestSegments[$i];
+                        self::$variables['input'][$varName] = $value;
+                        Log::info("PermissionGuard: Captured path variable", ['var' => $varName, 'value' => $value]);
+                    } elseif ($segment !== $requestSegments[$i]) {
+                        $matched = false;
+                        break;
                     }
                 }
 
-                Log::info("PermissionGuard: Returning matched rules", ['rules' => $ruleBlock]);
+                if (!$matched) {
+                    Log::info("PermissionGuard: Path segments did not match", [
+                        'config' => $configPath,
+                        'request' => $requestPath
+                    ]);
+                    continue;
+                }
+
+                // ------ Match da query string ------
+                if ($configQuery) {
+                    parse_str($requestQuery, $actualQueryParams);
+
+                    // parse pairs like param=$varName
+                    foreach (explode('&', $configQuery) as $pair) {
+                        if (!str_contains($pair, '=')) continue;
+                        [$param, $var] = explode('=', $pair, 2);
+
+                        if (!str_starts_with($var, '$')) continue;
+                        $varName = substr($var, 1); // remove $
+
+                        if (!array_key_exists($param, $actualQueryParams)) {
+                            Log::info("PermissionGuard: Query parameter not found", ['param' => $param]);
+                            $matched = false;
+                            break;
+                        }
+
+                        self::$variables['input'][$varName] = $actualQueryParams[$param];
+                        Log::info("PermissionGuard: Captured query variable", [
+                            'param' => $param,
+                            'var' => $varName,
+                            'value' => $actualQueryParams[$param]
+                        ]);
+                    }
+
+                    if (!$matched) {
+                        Log::info("PermissionGuard: Query string match failed");
+                        continue;
+                    }
+                }
+
+                Log::info("PermissionGuard: Route matched successfully", [
+                    'method' => $method,
+                    'path' => $requestPath,
+                    'input' => self::$variables['input']
+                ]);
+
                 return $ruleBlock;
             }
         }
 
-        Log::info("PermissionGuard: No URL matched the requested path");
+        Log::info("PermissionGuard: No route matched the request");
         return null;
     }
 
@@ -466,26 +549,22 @@ class PermissionGuard
         $requestPath = '/' . ltrim(request()->path(), '/');
         $urls = self::$config['urls'] ?? [];
 
-        Log::info("PermissionGuard: Starting getVarFromPathOrInput", ['key' => $key, 'requestPath' => $requestPath]);
-
-        // 1. Verifica se já existe em self::$variables['input']
+        // 1. Check in self::$variables['input'] (set by matchUrlConfig)
         if (isset(self::$variables['input'][$key])) {
-            Log::info("PermissionGuard: Found in variables.input", [
+            Log::info("PermissionGuard: getVarFromPathOrInput matched from self::\$variables[input]", [
                 'key' => $key,
                 'value' => self::$variables['input'][$key]
             ]);
             return self::$variables['input'][$key];
         }
 
-        // 2. Tenta extrair a partir da rota
-        foreach ($urls as $route => $config) {
-            if (!str_contains($route, '$' . $key)) {
+        // 2. Try to find in route path (e.g., /something/$id)
+        foreach ($urls as $urlPattern => $methods) {
+            if (!str_contains($urlPattern, '$' . $key)) {
                 continue;
             }
 
-            [$methodPart, $configPathQuery] = explode(' ', $route, 2);
-            $configPath = explode('?', $configPathQuery)[0];
-
+            $configPath = explode('?', $urlPattern)[0];
             $configSegments = explode('/', trim($configPath, '/'));
             $requestSegments = explode('/', trim($requestPath, '/'));
 
@@ -493,32 +572,21 @@ class PermissionGuard
                 continue;
             }
 
-            Log::info("PermissionGuard: Comparing segments", [
-                'configSegments' => $configSegments,
-                'requestSegments' => $requestSegments
-            ]);
-
             foreach ($configSegments as $i => $segment) {
-                if (str_starts_with($segment, '$')) {
-                    $varName = substr($segment, 1);
+                if ($segment === '$' . $key) {
                     $value = $requestSegments[$i];
-                    self::$variables['input'][$varName] = $value;
-
-                    Log::info("PermissionGuard: Matched variable from path", [
-                        'var' => $varName,
+                    Log::info("PermissionGuard: getVarFromPathOrInput matched from path", [
+                        'key' => $key,
                         'value' => $value
                     ]);
-
-                    if ($varName === $key) {
-                        return $value;
-                    }
+                    return $value;
                 }
             }
         }
 
-        // 3. Fallback para query string ou request input
+        // 3. Fallback to query string or request input
         $value = request()->query($key) ?? request()->input($key);
-        Log::info("PermissionGuard: Fallback to query/input", ['key' => $key, 'value' => $value]);
+        Log::info("PermissionGuard: getVarFromPathOrInput fallback", ['key' => $key, 'value' => $value]);
         return $value;
     }
 }

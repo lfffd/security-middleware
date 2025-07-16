@@ -481,22 +481,26 @@ class PermissionGuard
         $requestPath = '/' . ltrim(request()->path(), '/');
         $urls = self::$config['urls'] ?? [];
 
-        // 1. Check in self::$variables['input'] (set by matchUrlConfig)
+        Log::info("PermissionGuard: Starting getVarFromPathOrInput", ['key' => $key, 'requestPath' => $requestPath]);
+
+        // 1. Verifica se já existe em self::$variables['input']
         if (isset(self::$variables['input'][$key])) {
-            Log::info("PermissionGuard: getVarFromPathOrInput matched from self::\$variables[input]", [
+            Log::info("PermissionGuard: Found in variables.input", [
                 'key' => $key,
                 'value' => self::$variables['input'][$key]
             ]);
             return self::$variables['input'][$key];
         }
 
-        // 2. Try to find in route path (e.g., /something/$id)
-        foreach ($urls as $urlPattern => $methods) {
-            if (!str_contains($urlPattern, '$' . $key)) {
+        // 2. Tenta extrair a partir da rota
+        foreach ($urls as $route => $config) {
+            if (!str_contains($route, '$' . $key)) {
                 continue;
             }
 
-            $configPath = explode('?', $urlPattern)[0];
+            [$methodPart, $configPathQuery] = explode(' ', $route, 2);
+            $configPath = explode('?', $configPathQuery)[0];
+
             $configSegments = explode('/', trim($configPath, '/'));
             $requestSegments = explode('/', trim($requestPath, '/'));
 
@@ -504,21 +508,32 @@ class PermissionGuard
                 continue;
             }
 
+            Log::info("PermissionGuard: Comparing segments", [
+                'configSegments' => $configSegments,
+                'requestSegments' => $requestSegments
+            ]);
+
             foreach ($configSegments as $i => $segment) {
-                if ($segment === '$' . $key) {
+                if (str_starts_with($segment, '$')) {
+                    $varName = substr($segment, 1);
                     $value = $requestSegments[$i];
-                    Log::info("PermissionGuard: getVarFromPathOrInput matched from path", [
-                        'key' => $key,
+                    self::$variables['input'][$varName] = $value;
+
+                    Log::info("PermissionGuard: Matched variable from path", [
+                        'var' => $varName,
                         'value' => $value
                     ]);
-                    return $value;
+
+                    if ($varName === $key) {
+                        return $value;
+                    }
                 }
             }
         }
 
-        // 3. Fallback to query string or request input
+        // 3. Fallback para query string ou request input
         $value = request()->query($key) ?? request()->input($key);
-        Log::info("PermissionGuard: getVarFromPathOrInput fallback", ['key' => $key, 'value' => $value]);
+        Log::info("PermissionGuard: Fallback to query/input", ['key' => $key, 'value' => $value]);
         return $value;
     }
 }

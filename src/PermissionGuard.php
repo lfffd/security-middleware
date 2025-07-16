@@ -438,19 +438,6 @@ class PermissionGuard
 
         $parsedExpr = self::interpolateVars($expr);
 
-        $parsedExpr = preg_replace_callback('/(?<!["\'])\b([a-zA-Z_][a-zA-Z0-9_]*)\b(?!["\'])/', function ($matches) {
-            $word = $matches[1];
-
-            // Skip PHP literals and variables
-            if (in_array(strtolower($word), ['null', 'true', 'false']) || is_numeric($word) || str_starts_with($word, '$')) {
-                return $word;
-            }
-
-            // Wrap in single quotes
-            return "'$word'";
-        }, $parsedExpr);
-
-
         Log::info("PermissionGuard: Evaluating expression", ['expr' => $expr, 'parsed' => $parsedExpr]);
 
         try {

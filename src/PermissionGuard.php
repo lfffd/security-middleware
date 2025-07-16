@@ -295,7 +295,7 @@ class PermissionGuard
                 Log::info("PermissionGuard: Route matched successfully", [
                     'method' => $method,
                     'path' => $requestPath,
-                    'input' => self::$variables['input']
+                    'input' => self::$variables['input']??[]
                 ]);
 
                 return $ruleBlock;

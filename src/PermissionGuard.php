@@ -162,7 +162,6 @@ class PermissionGuard
         foreach ($config as $methodAndUrl => $ruleBlock) {
             Log::info("PermissionGuard: Checking configured route key", ['route' => $methodAndUrl]);
 
-            // Separar método e URL
             if (!str_contains($methodAndUrl, ' ')) {
                 Log::warning("PermissionGuard: Invalid route key format, skipping", ['key' => $methodAndUrl]);
                 continue;
@@ -172,13 +171,11 @@ class PermissionGuard
             $configMethod = strtoupper(trim($configMethod));
             $configUrl = trim($configUrl);
 
-            // Armazenar rota se ainda não houver configuração
             if (!is_array($ruleBlock) || empty($ruleBlock)) {
                 $bufferedRoutes[] = [$configMethod, $configUrl];
                 continue;
             }
 
-            // Quando encontramos uma configuração válida, aplicar a todas as rotas anteriores
             $routesToCheck = array_merge($bufferedRoutes, [[$configMethod, $configUrl]]);
             $bufferedRoutes = [];
 
@@ -191,63 +188,34 @@ class PermissionGuard
                 $configPath = $parts[0];
                 $configQuery = $parts[1] ?? '';
 
-                $placeholder = '___VAR___';
-                $tempPath = preg_replace('/\$[a-zA-Z0-9_]+/', $placeholder, $configPath);
-                $escapedPath = preg_quote($tempPath, '/');
-                $patternPath = str_replace($placeholder, '[^/]+', $escapedPath);
-
-                Log::info("PermissionGuard: Path regex pattern", ['pattern' => $patternPath]);
-
-                if (preg_match("~^$patternPath$~", $requestPath)) {
-                    Log::info("PermissionGuard: Path matched", ['configPath' => $configPath]);
-
-                    // Query string?
-                    if ($configQuery) {
-                        $queryPattern = preg_quote($configQuery, '/');
-                        $queryPattern = preg_replace('/\\\\\$[a-zA-Z0-9_]+/', '[^&=]+', $queryPattern);
-
-                        Log::info("PermissionGuard: Query regex pattern", ['pattern' => $queryPattern]);
-
-                        if (!preg_match("~^$queryPattern$~", $requestQuery)) {
-                            Log::info("PermissionGuard: Query string did not match", ['configQuery' => $configQuery, 'requestQuery' => $requestQuery]);
-                            continue;
-                        }
-                    }
-
-                    // Capturar variáveis da query string
-                    if ($configQuery) {
-                        preg_match_all('/\$([a-zA-Z0-9_]+)/', $configQuery, $matches);
-                        // Capturar variáveis da PATH
-                        $patternPathVars = [];
-                        preg_match_all('/\$([a-zA-Z0-9_]+)/', $configPath, $patternPathVars);
-                        if (!empty($patternPathVars[1])) {
-                            $regexPath = preg_replace('/\$([a-zA-Z0-9_]+)/', '([^/]+)', preg_quote($configPath, '/'));
-                            $matchesPath = [];
-                            if (preg_match("~^$regexPath$~", $requestPath, $matchesPath)) {
-                                array_shift($matchesPath); // remove full match
-                                foreach ($patternPathVars[1] as $i => $varName) {
-                                    self::$variables['input'][$varName] = $matchesPath[$i];
-                                    Log::info("PermissionGuard: Captured path variable", ['var' => $varName, 'value' => $matchesPath[$i]]);
-                                }
-                            }
-                        }
-
-                        // Capturar variáveis da QUERY
-                        preg_match_all('/\$([a-zA-Z0-9_]+)/', $configQuery, $matches);
-                        foreach ($matches[1] as $varName) {
-                            $val = request()->query($varName);
-                            if ($val !== null) {
-                                self::$variables['input'][$varName] = $val;
-                                Log::info("PermissionGuard: Captured query variable", ['var' => $varName, 'value' => $val]);
-                            }
-                        }
-                    }
-
-                    Log::info("PermissionGuard: Returning matched rules", ['rules' => $ruleBlock]);
-                    return $ruleBlock;
-                } else {
-                    Log::info("PermissionGuard: Path did not match", ['pattern' => $patternPath, 'requestPath' => $requestPath]);
+                // Match path and extract vars
+                $patternPathVars = [];
+                preg_match_all('/\$([a-zA-Z0-9_]+)/', $configPath, $patternPathVars);
+                $regexPath = preg_replace('/\$([a-zA-Z0-9_]+)/', '([^/]+)', preg_quote($configPath, '/'));
+                $matchesPath = [];
+                if (!preg_match("~^$regexPath$~", $requestPath, $matchesPath)) {
+                    Log::info("PermissionGuard: Path did not match", ['pattern' => $regexPath, 'requestPath' => $requestPath]);
+                    continue;
                 }
+
+                array_shift($matchesPath);
+                foreach ($patternPathVars[1] as $i => $varName) {
+                    self::$variables['input'][$varName] = $matchesPath[$i];
+                    Log::info("PermissionGuard: Captured path variable", ['var' => $varName, 'value' => $matchesPath[$i]]);
+                }
+
+                // Match query vars
+                preg_match_all('/\$([a-zA-Z0-9_]+)/', $configQuery, $queryVars);
+                foreach ($queryVars[1] as $varName) {
+                    $val = request()->query($varName);
+                    if ($val !== null) {
+                        self::$variables['input'][$varName] = $val;
+                        Log::info("PermissionGuard: Captured query variable", ['var' => $varName, 'value' => $val]);
+                    }
+                }
+
+                Log::info("PermissionGuard: Returning matched rules", ['rules' => $ruleBlock]);
+                return $ruleBlock;
             }
         }
 
